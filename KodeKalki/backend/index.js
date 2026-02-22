@@ -45,15 +45,36 @@ console.log("- JWT_SECRET exists:", !!process.env.JWT_SECRET)
 const app = express()
 const server = createServer(app)
 
-// ✅ Enhanced Socket.IO configuration with better error handling
+// ✅ UPDATED: Enhanced Socket.IO configuration with Vercel support
+const allowedSocketOrigins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+  "http://localhost:3000",
+  "https://KodeKalki.netlify.app",
+  "https://gadesh-ldnq.vercel.app",
+  "https://gadesh.vercel.app"
+];
+
 const io = new Server(server, {
   cors: {
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://localhost:5175",
-      "https://KodeKalki.netlify.app",
-    ],
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, etc.)
+      if (!origin) return callback(null, true);
+      
+      // Check if origin is in allowed list
+      if (allowedSocketOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      
+      // Allow all Vercel preview deployments (*.vercel.app)
+      if (origin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+      
+      console.log('❌ Socket.IO blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    },
     methods: ["GET", "POST"],
     credentials: true,
   },
@@ -65,21 +86,46 @@ const io = new Server(server, {
   maxHttpBufferSize: 1e6,
 });
 
-console.log("🌐 Express app and Socket.IO server created with enhanced configuration")
+console.log("🌐 Express app and Socket.IO server created with enhanced Vercel configuration")
 
-// Middleware
+// ✅ UPDATED: CORS Configuration with Vercel support
+const allowedOrigins = [
+  "http://localhost:5173",
+  "http://localhost:5174",
+  "http://localhost:5175",
+  "http://localhost:3000",
+  "https://KodeKalki.netlify.app",
+  "https://gadesh-ldnq.vercel.app",
+  "https://gadesh.vercel.app"
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "http://localhost:5174",
-      "http://localhost:5175",
-      "https://KodeKalki.netlify.app",
-    ],
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, curl, Postman)
+      if (!origin) return callback(null, true);
+      
+      // Check if origin is in allowed list
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      
+      // Allow all Vercel preview deployments (*.vercel.app)
+      if (origin.endsWith('.vercel.app')) {
+        return callback(null, true);
+      }
+      
+      console.log('❌ CORS blocked origin:', origin);
+      callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    exposedHeaders: ['set-cookie']
   })
 );
-console.log("✅ CORS middleware enabled")
+console.log("✅ CORS middleware enabled with Vercel support")
+console.log("✅ Allowed origins:", allowedOrigins)
 
 app.use(express.json())
 console.log("✅ JSON middleware enabled")
@@ -134,14 +180,10 @@ console.log("✅ MCQ routes mounted at /api/mcq")
 app.use("/api/profile", profileRoutes)
 console.log("✅ Profile routes mounted at /api/profile")
 
-
 app.use("/api/profiles", showProfileRoutes);
 
-
 app.use('/api/help', helpRoutes);
- console.log("✅ Help routes mounted at /api/help");
-
-
+console.log("✅ Help routes mounted at /api/help");
 
 app.use("/api/potd", potdRoutes)
 console.log("✅ POTD routes mounted at /api/potd")
@@ -176,6 +218,25 @@ console.log("✅ Stats routes mounted at /api/stats")
 app.use("/api/documents", documentRoutes)
 console.log("✅ Document routes mounted at /api/documents")
 
+// ✅ NEW: Test routes for debugging
+app.get("/", (req, res) => {
+  res.json({
+    success: true,
+    message: "Backend is running!",
+    timestamp: new Date().toISOString(),
+    origin: req.headers.origin
+  })
+})
+
+app.get("/test-cors", (req, res) => {
+  res.json({
+    success: true,
+    message: "CORS is working perfectly!",
+    origin: req.headers.origin,
+    allowedOrigins: allowedOrigins
+  })
+})
+
 // Health check endpoint
 app.get("/api/health", (req, res) => {
   console.log("🏥 Health check requested")
@@ -207,6 +268,7 @@ console.log("✅ Socket.IO rapid fire handlers configured")
 // ✅ Add connection monitoring
 io.on("connection", (socket) => {
   console.log(`🔌 New socket connection: ${socket.id}`)
+  console.log(`🔌 Origin: ${socket.handshake.headers.origin}`)
 
   socket.on("disconnect", (reason) => {
     console.log(`🔌 Socket disconnected: ${socket.id}, reason: ${reason}`)
@@ -220,14 +282,13 @@ io.on("connection", (socket) => {
 const PORT = process.env.PORT || 5000
 server.listen(PORT, async () => {
   console.log("🎉 Server is running successfully!")
-  console.log(`📍 Server URL: https://kodekalkiprefinal-6.onrender.com`)
-  console.log(`🏥 Health check: https://kodekalkiprefinal-6.onrender.com/api/health`)
+  console.log(`📍 Server URL: https://mahadev-1-xp7w.onrender.com`)
+  console.log(`🏥 Health check: https://mahadev-1-xp7w.onrender.com/api/health`)
+  console.log(`🧪 CORS test: https://mahadev-1-xp7w.onrender.com/test-cors`)
   console.log("📡 Socket.IO enabled for real-time features")
   console.log("🔥 Ready to accept requests!")
   console.log("🔌 Socket.IO transports: websocket, polling")
-  console.log(
-    "🔌 Socket.IO CORS origins: localhost:5173, KodeKalki.netlify.app"
-  );
+  console.log("🔌 Allowed origins:", allowedOrigins)
 
   // Initialize contest status and rating updates
   console.log("🏆 Initializing contest rating system...")
@@ -237,7 +298,7 @@ server.listen(PORT, async () => {
 
 setInterval(async () => {
   try {
-    const res = await axios.get("https://kodekalkiprefinal-6.onrender.com/api/health")
+    const res = await axios.get("https://mahadev-1-xp7w.onrender.com/api/health")
     console.log(`🔄 Self-ping at ${new Date().toISOString()} | status: ${res.data.status}`)
   } catch (error) {
     console.error("⚠️ Self-ping failed:", error.message)
@@ -321,7 +382,5 @@ async function backfillContestHistory() {
 // Legacy backfill - can be called manually if needed
 // backfillContestHistory();
 
-// If you have any config for Render, comment it out or remove it
-// Example: const BASE_URL = 'https://your-app.onrender.com';
-// Change to:
+// Base URL for local development
 const BASE_URL = 'http://localhost:5000';
