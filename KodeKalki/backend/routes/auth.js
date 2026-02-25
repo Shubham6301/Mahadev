@@ -4,7 +4,7 @@ import User from '../models/User.js';
 import { authenticateToken } from '../middleware/auth.js';
 import passport from 'passport';
 import session from 'express-session';
-import '../services/passport.js'; // See next code block for this file
+import '../services/passport.js';
 
 const router = express.Router();
 
@@ -17,228 +17,250 @@ router.use(session({
 router.use(passport.initialize());
 router.use(passport.session());
 
-// Register
-router.post('/register', async (req, res) => {
-  console.log('📝 Registration attempt started');
-  console.log('📊 Request body:', { ...req.body, password: '[HIDDEN]' });
+// ──────────────────────────────────────────────────────────────────────────────
+// GET /auth/check-username?username=xxx
+// Returns { available: true/false }
+// Used by Register page for real-time uniqueness check
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/check-username', async (req, res) => {
   try {
-    const { username, email, password, role = 'user', googleId } = req.body;
-    console.log('🔍 Checking for existing user...');
-    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
-    console.log('🔍 Existing user query result:', existingUser);
-    if (existingUser) {
-      console.log('❌ User already exists:', existingUser.username);
-      return res.status(400).json({ message: 'User already exists with this email or username' });
+    const { username } = req.query;
+
+    if (!username || typeof username !== 'string' || username.trim().length < 3) {
+      return res.status(400).json({ available: false, message: 'Username must be at least 3 characters' });
     }
-    console.log('✅ No existing user found, creating new user...');
-    const userData = {
-      username,
-      email,
-      password: googleId ? undefined : password,
-      role,
-      googleId: googleId || undefined,
-      coins: 0,
-      profile: {
-        firstName: '',
-        lastName: '',
-        linkedIn: '',
-        github: '',
-        avatar: `default:${username.charAt(0).toUpperCase()}`,
-        bio: '',
-        location: '',
-        college: '',
-        branch: '',
-        graduationYear: null
-      }
-    };
-    console.log('🛠 User data to be saved:', userData);
-    const user = new User(userData);
-    console.log('💾 Saving user to database...');
-    try {
-      await user.save();
-      console.log('✅ User saved successfully:', user.username);
-    } catch (saveError) {
-      console.error('❌ Error during user.save():', saveError);
-      if (saveError.code === 11000) {
-        const field = Object.keys(saveError.keyPattern)[0];
-        return res.status(400).json({ message: `A user with this ${field} already exists.` });
-      }
-      return res.status(500).json({ message: 'Error saving user', error: saveError.message });
-    }
-    console.log('🔐 Generating JWT token...');
-    let token;
-    try {
-      token = jwt.sign(
-        { userId: user._id },
-        process.env.JWT_SECRET,
-        { expiresIn: '24h' }
-      );
-      console.log('✅ JWT token generated');
-    } catch (jwtError) {
-      console.error('❌ Error generating JWT:', jwtError);
-      return res.status(500).json({ message: 'Error generating token', error: jwtError.message });
-    }
-    const responseData = {
-      message: 'User created successfully',
-      token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        role: user.role
-      }
-    };
-    console.log('🎉 Registration successful for:', user.username);
-    res.status(201).json(responseData);
-  } catch (error) {
-    console.error('❌ Registration error (outer catch):', error);
-    console.error('📊 Error details:', {
-      name: error.name,
-      message: error.message,
-      stack: error.stack
+
+    const exists = await User.findOne({
+      username: { $regex: new RegExp(`^${username.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
     });
-    res.status(500).json({ message: 'Server error', error: error.message });
+
+    return res.json({ available: !exists });
+  } catch (error) {
+    console.error('check-username error:', error);
+    return res.status(500).json({ available: false, message: 'Server error' });
   }
 });
 
-// Login
-router.post('/login', async (req, res) => {
-  console.log('🔐 Login attempt started');
-  console.log('📊 Request body:', { ...req.body, password: '[HIDDEN]' });
-  
+// ──────────────────────────────────────────────────────────────────────────────
+// GET /auth/check-email?email=xxx
+// Returns { available: true/false }
+// Used by Register page for real-time existence check
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/check-email', async (req, res) => {
   try {
-    const { username, password, role = 'user' } = req.body;
+    const { email } = req.query;
 
-    console.log('🔍 Searching for user:', username);
-    // Find user
-    const user = await User.findOne({ 
-      $or: [{ email: username }, { username }] 
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ available: false, message: 'Email is required' });
+    }
+
+    const trimmedEmail = email.trim().toLowerCase();
+    const emailRegex   = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+    if (!emailRegex.test(trimmedEmail)) {
+      return res.status(400).json({ available: false, message: 'Invalid email format' });
+    }
+
+    const exists = await User.findOne({ email: trimmedEmail });
+
+    return res.json({ available: !exists });
+  } catch (error) {
+    console.error('check-email error:', error);
+    return res.status(500).json({ available: false, message: 'Server error' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// POST /auth/register
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/register', async (req, res) => {
+  console.log('📝 Registration attempt started');
+  try {
+    const { username, email, password, role = 'user', googleId } = req.body;
+
+    if (!username || !email) {
+      return res.status(400).json({ message: 'Username and email are required' });
+    }
+    if (!googleId && !password) {
+      return res.status(400).json({ message: 'Password is required' });
+    }
+
+    // ── Server-side uniqueness check (never trust only client) ───────────────
+    const existingUsername = await User.findOne({
+      username: { $regex: new RegExp(`^${username.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') }
     });
-
-    if (!user) {
-      console.log('❌ User not found:', username);
-      return res.status(400).json({ message: 'Invalid credentials' });
+    if (existingUsername) {
+      return res.status(409).json({ message: 'Username is already taken' });
     }
 
-    // Check role
-    if (user.role !== "user" && user.role !== "admin") {
-      console.log('❌ Role not allowed for user:', user.username, 'Actual:', user.role);
-      return res.status(400).json({ message: 'Invalid credentials or insufficient permissions' });
+    const existingEmail = await User.findOne({ email: email.trim().toLowerCase() });
+    if (existingEmail) {
+      return res.status(409).json({ message: 'An account with this email already exists' });
     }
 
-    console.log('✅ User found:', user.username);
-    console.log('🔒 Checking password...');
-    // Check password
-    const isMatch = await user.comparePassword(password);
-    if (!isMatch) {
-      console.log('❌ Password mismatch for user:', user.username);
-      return res.status(400).json({ message: 'Invalid credentials' });
+    // ── Create user ───────────────────────────────────────────────────────────
+    const userData = {
+      username: username.trim(),
+      email:    email.trim().toLowerCase(),
+      password: googleId ? undefined : password,
+      role:     'user',          // Registration always creates a regular user
+      googleId: googleId || undefined,
+      coins:    0,
+      profile: {
+        firstName: '', lastName: '', linkedIn: '', github: '',
+        avatar: `default:${username.trim().charAt(0).toUpperCase()}`,
+        bio: '', location: '', college: '', branch: '', graduationYear: null
+      }
+    };
+
+    const user = new User(userData);
+
+    try {
+      await user.save();
+    } catch (saveError) {
+      if (saveError.code === 11000) {
+        const field = Object.keys(saveError.keyPattern)[0];
+        return res.status(409).json({ message: `A user with this ${field} already exists.` });
+      }
+      throw saveError;
     }
 
-    console.log('✅ Password verified for:', user.username);
-    console.log('🔐 Generating JWT token...');
-    // Generate token
+    // ── Generate JWT ──────────────────────────────────────────────────────────
     const token = jwt.sign(
       { userId: user._id },
       process.env.JWT_SECRET,
       { expiresIn: '24h' }
     );
-    console.log('✅ JWT token generated');
 
-    const responseData = {
-      message: 'Login successful',
+    console.log('✅ Registration successful for:', user.username);
+    return res.status(201).json({
+      message: 'User created successfully',
       token,
-      user: {
-        id: user._id,
-        username: user.username,
-        email: user.email,
-        role: user.role
-      }
-    };
-
-    console.log('🎉 Login successful for:', user.username);
-    res.json(responseData);
-  } catch (error) {
-    console.error('❌ Login error:', error);
-    console.error('📊 Error details:', {
-      name: error.name,
-      message: error.message,
-      stack: error.stack
+      user: { id: user._id, username: user.username, email: user.email, role: user.role }
     });
-    res.status(500).json({ message: 'Server error', error: error.message });
+  } catch (error) {
+    console.error('❌ Registration error:', error);
+    return res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-// Get current user
-router.get('/me', authenticateToken, async (req, res) => {
-  console.log('👤 Get current user request');
-  console.log('📊 User ID from token:', req.user._id);
-
+// ──────────────────────────────────────────────────────────────────────────────
+// POST /auth/login
+// role field = 'user' or 'admin' (sent by frontend to indicate which panel)
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/login', async (req, res) => {
+  console.log('🔐 Login attempt started');
   try {
-    const user = await User.findById(req.user._id)
-      .select('-password'); // Remove .lean() to allow saving
+    const { username, password, role: expectedPanel = 'user' } = req.body;
 
-    if (!user) 
-    {
-      console.log('❌ User not found');
-      return res.status(404).json({ message: 'User not found' });
+    if (!username || !password) {
+      return res.status(400).json({ message: 'Username and password are required' });
     }
 
-    // Calculate streak from submissions (fix timezone issues - IST)
-    console.log('📈 Calculating current streak...');
-    const submissions = user.submissions || [];
+    // Find by username OR email
+    const user = await User.findOne({
+      $or: [
+        { username: { $regex: new RegExp(`^${username.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+        { email: username.trim().toLowerCase() }
+      ]
+    });
+
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // ── Role-based Panel Guard ────────────────────────────────────────────────
+    //
+    //  User Panel  ('user')  → only role='user' accounts allowed
+    //  Admin Panel ('admin') → only role='admin' accounts allowed
+    //
+    if (expectedPanel === 'admin' && user.role !== 'admin') {
+      console.log(`❌ Non-admin tried to access admin panel: ${user.username}`);
+      return res.status(403).json({
+        message: 'Your current account does not have access to the Admin Panel'
+      });
+    }
+
+    if (expectedPanel === 'user' && user.role === 'admin') {
+      console.log(`❌ Admin tried to login through user panel: ${user.username}`);
+      return res.status(403).json({
+        message: 'Please ensure you are signing in through the correct login page'
+      });
+    }
+
+    // ── Password check ────────────────────────────────────────────────────────
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      console.log('❌ Password mismatch for:', user.username);
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // ── Generate JWT ──────────────────────────────────────────────────────────
+    const token = jwt.sign(
+      { userId: user._id },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    console.log(`✅ Login successful for: ${user.username} (role: ${user.role}, panel: ${expectedPanel})`);
+    return res.json({
+      message: 'Login successful',
+      token,
+      user: { id: user._id, username: user.username, email: user.email, role: user.role }
+    });
+  } catch (error) {
+    console.error('❌ Login error:', error);
+    return res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GET /auth/me  (unchanged)
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/me', authenticateToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).select('-password');
+    if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // Calculate streak from submissions (IST)
+    const submissions         = user.submissions || [];
     const acceptedSubmissions = submissions
       .filter(sub => sub.status === 'accepted')
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    
+
     let currentStreak = 0;
     if (acceptedSubmissions.length > 0) {
-      // Get today's date in IST (UTC + 5:30)
-      const now = new Date();
-      const istOffset = 5.5 * 60; // 5 hours 30 minutes in minutes
-      const todayIST = new Date(now.getTime() + (istOffset * 60 * 1000));
+      const istOffset  = 5.5 * 60;
+      const now        = new Date();
+      const todayIST   = new Date(now.getTime() + istOffset * 60 * 1000);
       const todayLocal = new Date(todayIST.getFullYear(), todayIST.getMonth(), todayIST.getDate());
-      
-      // Group submissions by local IST date
+
       const submissionDates = new Set();
       acceptedSubmissions.forEach(sub => {
         const subDate = new Date(sub.date);
-        const istDate = new Date(subDate.getTime() + (istOffset * 60 * 1000));
-        const localDate = new Date(istDate.getFullYear(), istDate.getMonth(), istDate.getDate());
-        submissionDates.add(localDate.getTime());
+        const istDate = new Date(subDate.getTime() + istOffset * 60 * 1000);
+        submissionDates.add(new Date(istDate.getFullYear(), istDate.getMonth(), istDate.getDate()).getTime());
       });
-      
-      // Convert to sorted array of dates
+
       const sortedDates = Array.from(submissionDates)
-        .map(timestamp => new Date(timestamp))
+        .map(ts => new Date(ts))
         .sort((a, b) => b.getTime() - a.getTime());
-      
-      // Calculate consecutive streak from most recent date
+
       if (sortedDates.length > 0) {
-        const mostRecentDate = sortedDates[0];
-        const daysSinceLastSubmission = Math.floor((todayLocal.getTime() - mostRecentDate.getTime()) / (1000 * 60 * 60 * 24));
-        
-        // Only count streak if last submission was today or yesterday
-        if (daysSinceLastSubmission <= 1) {
+        const daysSinceLast = Math.floor((todayLocal.getTime() - sortedDates[0].getTime()) / 86400000);
+        if (daysSinceLast <= 1) {
           currentStreak = 1;
-          let lastDate = mostRecentDate;
-          
+          let lastDate = sortedDates[0];
           for (let i = 1; i < sortedDates.length; i++) {
-            const currentDate = sortedDates[i];
-            const daysDiff = Math.floor((lastDate.getTime() - currentDate.getTime()) / (1000 * 60 * 60 * 24));
-            
-            if (daysDiff === 1) {
+            if (Math.floor((lastDate.getTime() - sortedDates[i].getTime()) / 86400000) === 1) {
               currentStreak++;
-              lastDate = currentDate;
-            } else {
-              break;
-            }
+              lastDate = sortedDates[i];
+            } else break;
           }
         }
       }
     }
 
-    // Update user's currentStreak if different
     if (!user.stats) {
       user.stats = {
         problemsSolved: { total: 0, easy: 0, medium: 0, hard: 0 },
@@ -246,69 +268,43 @@ router.get('/me', authenticateToken, async (req, res) => {
         totalSubmissions: submissions.length,
         correctSubmissions: acceptedSubmissions.length,
         accuracy: submissions.length > 0 ? (acceptedSubmissions.length / submissions.length) * 100 : 0,
-        currentStreak: currentStreak,
-        maxStreak: Math.max(user.stats?.maxStreak || 0, currentStreak)
+        currentStreak,
+        maxStreak: currentStreak,
       };
     } else {
       user.stats.currentStreak = currentStreak;
-      if (currentStreak > (user.stats.maxStreak || 0)) {
-        user.stats.maxStreak = currentStreak;
-      }
+      if (currentStreak > (user.stats.maxStreak || 0)) user.stats.maxStreak = currentStreak;
     }
 
-    // Save the updated user data
     await user.save();
 
-    // ✅ Compute default avatar on-the-fly, don't write to DB
     if (!user.profile) {
-      user.profile = {
-        firstName: '',
-        lastName: '',
-        linkedIn: '',
-        github: '',
-        avatar: `default:${user.username.charAt(0).toUpperCase()}`,
-        bio: '',
-        location: '',
-        college: '',
-        branch: '',
-        graduationYear: null
-      };
+      user.profile = { firstName: '', lastName: '', linkedIn: '', github: '', avatar: `default:${user.username.charAt(0).toUpperCase()}`, bio: '', location: '', college: '', branch: '', graduationYear: null };
     } else if (!user.profile.avatar || user.profile.avatar.trim() === '') {
       user.profile.avatar = `default:${user.username.charAt(0).toUpperCase()}`;
     }
 
-    console.log('✅ User data retrieved with streak:', user.username, 'streak:', currentStreak);
-    res.json(user);
+    return res.json(user);
   } catch (error) {
     console.error('❌ Get user error:', error);
-    res.status(500).json({ message: 'Server error', error: error.message });
+    return res.status(500).json({ message: 'Server error', error: error.message });
   }
 });
 
-
-// --- Google OAuth2 routes ---
-router.get('/google',
-  passport.authenticate('google', { scope: ['profile', 'email'] })
-);
+// ──────────────────────────────────────────────────────────────────────────────
+// Google OAuth (unchanged)
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
 
 router.get('/google/callback',
   passport.authenticate('google', { failureRedirect: '/login', session: false }),
   async (req, res) => {
-    // Successful authentication, issue JWT and redirect or respond
-    const user = req.user;
-    // Ensure user object has all required fields for frontend
-    const token = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-    // Redirect to frontend (production or development)
-    const frontendUrl =
-      process.env.NODE_ENV === "production"
-        ? "https://KodeKalki.netlify.app"
-        : "https://KodeKalki.netlify.app";
+    const user  = req.user;
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '24h' });
+    const frontendUrl = process.env.NODE_ENV === 'production'
+      ? 'https://KodeKalki.netlify.app'
+      : 'https://KodeKalki.netlify.app';
     res.redirect(`${frontendUrl}/oauth?token=${encodeURIComponent(token)}`);
-    // Or: res.json({ token, user });
   }
 );
 
