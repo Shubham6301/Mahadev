@@ -31,6 +31,53 @@ router.get("/items/:category", auth, async (req, res) => {
   }
 });
 
+// Cancel order (user)
+router.post("/cancel-order", auth, async (req, res) => {
+  try {
+    const { orderId, reason } = req.body;
+    const userId = req.user.id;
+
+    if (!orderId) {
+      return res.status(400).json({ error: "Order ID is required" });
+    }
+
+    const order = await RedeemOrder.findOne({ _id: orderId, userId });
+
+    if (!order) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+
+    if (!["pending", "processing"].includes(order.status)) {
+      return res.status(400).json({
+        error: "Order cannot be cancelled at this stage",
+      });
+    }
+
+    // Update order fields
+    order.status = "cancelled";
+    order.cancelledBy = "user";
+    order.cancelReason = reason || "No reason provided";
+    order.cancelledAt = new Date();
+    order.deliveredAt = null; // ensure delivered date is cleared
+
+    await order.save();
+
+    // Refund coins
+    const user = await User.findById(userId);
+    user.coins = (user.coins || 0) + order.totalCost;
+    await user.save();
+
+    res.json({
+      message: "Order cancelled successfully",
+      refundedCoins: order.totalCost,
+      currentCoins: user.coins,
+    });
+  } catch (error) {
+    console.error("Error cancelling order:", error);
+    res.status(500).json({ error: "Failed to cancel order" });
+  }
+});
+
 // Create a new redeem order
 router.post("/order", auth, async (req, res) => {
   try {
@@ -163,7 +210,7 @@ router.get("/orders/:orderId", auth, async (req, res) => {
 // Admin: Add new redeem item
 router.post("/admin/items", auth, async (req, res) => {
   try {
-    // Check if user is admin (you might want to add admin middleware)
+    // Check if user is admin
     const user = await User.findById(req.user.id);
     if (user.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
@@ -250,38 +297,100 @@ router.get("/admin/orders", auth, async (req, res) => {
   }
 });
 
-// Admin: Update order status
+// Admin: Update order status (enhanced with delivery predictions)
 router.put("/admin/orders/:orderId", auth, async (req, res) => {
   try {
-    // Check if user is admin
-    const user = await User.findById(req.user.id);
-    if (user.role !== "admin") {
+    const admin = await User.findById(req.user.id);
+    if (!admin || admin.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
     }
 
     const { orderId } = req.params;
-    const { status, trackingNumber } = req.body;
+    const { status, trackingNumber, reason, deliveredAt, predictedDeliveryDate } = req.body;
 
-    const updateData = { status };
-    if (trackingNumber) {
-      updateData.trackingNumber = trackingNumber;
-    }
-
-    const order = await RedeemOrder.findByIdAndUpdate(orderId, updateData, {
-      new: true,
-      runValidators: true,
-    })
-      .populate("userId", "username email")
-      .populate("itemId", "name");
-
+    const order = await RedeemOrder.findById(orderId);
     if (!order) {
       return res.status(404).json({ error: "Order not found" });
     }
 
-    res.json({ message: "Order updated successfully", order });
+    // Prevent changes if already cancelled
+    if (order.status === "cancelled") {
+      return res.status(400).json({ error: "Order already cancelled" });
+    }
+
+    // Delivered orders cannot be cancelled
+    if (order.status === "delivered" && status === "cancelled") {
+      return res.status(400).json({
+        error: "Delivered orders cannot be cancelled",
+      });
+    }
+
+    // --- Admin cancelling ---
+    if (status === "cancelled") {
+      if (!reason || reason.trim() === "") {
+        return res.status(400).json({
+          error: "Cancellation reason is required",
+        });
+      }
+
+      order.status = "cancelled";
+      order.cancelledBy = "admin";
+      order.cancelReason = reason.trim();
+      order.cancelledAt = new Date();
+      order.deliveredAt = null;
+      order.predictedDeliveryDate = null; // Clear prediction
+
+      const user = await User.findById(order.userId);
+      if (user) {
+        user.coins = (user.coins || 0) + order.totalCost;
+        await user.save();
+      }
+    } else {
+      // Non‑cancellation update
+      order.status = status;
+
+      // Handle deliveredAt
+      if (status === "delivered") {
+        if (deliveredAt) {
+          order.deliveredAt = new Date(deliveredAt);
+        } else {
+          order.deliveredAt = new Date();
+        }
+        // Clear prediction once delivered
+        order.predictedDeliveryDate = null;
+      } else if (status === "shipped") {
+        // Auto-calculate predicted delivery (7 days from now if not provided)
+        if (predictedDeliveryDate) {
+          order.predictedDeliveryDate = new Date(predictedDeliveryDate);
+        } else if (!order.predictedDeliveryDate) {
+          const predicted = new Date();
+          predicted.setDate(predicted.getDate() + 7); // 7 days delivery estimate
+          order.predictedDeliveryDate = predicted;
+        }
+        order.deliveredAt = null;
+      } else {
+        // Status changed away from delivered/shipped
+        order.deliveredAt = null;
+        // Keep prediction for processing status
+        if (status === "processing" && predictedDeliveryDate) {
+          order.predictedDeliveryDate = new Date(predictedDeliveryDate);
+        }
+      }
+    }
+
+    if (trackingNumber) {
+      order.trackingNumber = trackingNumber;
+    }
+
+    await order.save();
+
+    res.json({
+      message: "Order updated successfully",
+      order,
+    });
   } catch (error) {
-    console.error("Error updating order:", error);
-    res.status(500).json({ error: "Failed to update order" });
+    console.error(error);
+    res.status(500).json({ error: "Server error" });
   }
 });
 
