@@ -33,7 +33,6 @@ import statsRouter from "./routes/stats.js"
 import documentRoutes from "./routes/documents.js"
 import showProfileRoutes from "./routes/showProfileRoutes.js";
 import helpRoutes from './routes/helpRoutes.js';
-
 // Load environment variables
 console.log("✅ Environment variables loaded")
 console.log("📊 Environment check:")
