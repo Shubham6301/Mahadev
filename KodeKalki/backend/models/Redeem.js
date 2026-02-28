@@ -12,7 +12,7 @@ const redeemItemSchema = new mongoose.Schema({
   },
   coinsCost: {
     type: Number,
-    required: true,
+    required: true, 
     min: 1
   },
   category: {
@@ -99,6 +99,9 @@ const redeemOrderSchema = new mongoose.Schema({
     enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],
     default: 'pending'
   },
+   reason: {
+    type: String
+  },
   orderDate: {
     type: Date,
     default: Date.now
@@ -106,6 +109,29 @@ const redeemOrderSchema = new mongoose.Schema({
   trackingNumber: {
     type: String,
     sparse: true
+  },
+
+  // 👇 ADD THESE HERE
+  cancelledBy: {
+    type: String,
+    enum: ["user", "admin"],
+  },
+
+  cancelReason: {
+    type: String,
+    trim: true,
+  },
+
+  cancelledAt: {
+    type: Date,
+  },
+   deliveredAt: {
+  type: Date,
+  default: null
+ },
+  predictedDeliveryDate: {
+    type: Date,
+    default: null
   }
 });
 
