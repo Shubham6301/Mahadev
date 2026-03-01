@@ -1,6 +1,7 @@
 import express from 'express';
 import Discussion from '../models/Discussion.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
+import { notifyAdmin } from '../utils/notificationHelper.js'; // 🔔
 
 const router = express.Router();
 
@@ -81,6 +82,15 @@ router.post('/', authenticateToken, async (req, res) => {
 
     await discussion.save();
     await discussion.populate('author', 'username');
+
+    // 🔔 Notify admin — new discussion posted
+    notifyAdmin(
+      'admin_discussion_created',
+      '💬 New Discussion Posted',
+      `${req.user.username} posted: "${discussion.title}"`,
+      `/top/${discussion._id}`,
+      { discussionId: discussion._id }
+    ).catch(() => {});
 
     res.status(201).json(discussion);
   } catch (error) {
