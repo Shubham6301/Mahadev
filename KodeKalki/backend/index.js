@@ -33,6 +33,9 @@ import statsRouter from "./routes/stats.js"
 import documentRoutes from "./routes/documents.js"
 import showProfileRoutes from "./routes/showProfileRoutes.js";
 import helpRoutes from './routes/helpRoutes.js';
+import notificationRoutes from './routes/notifications.js';        // 🔔 Notifications
+import { setIO } from './utils/notificationHelper.js';             // 🔔 Notification helper
+
 // Load environment variables
 console.log("✅ Environment variables loaded")
 console.log("📊 Environment check:")
@@ -217,6 +220,9 @@ console.log("✅ Stats routes mounted at /api/stats")
 app.use("/api/documents", documentRoutes)
 console.log("✅ Document routes mounted at /api/documents")
 
+app.use("/api/notifications", notificationRoutes)                  // 🔔 Notifications
+console.log("✅ Notification routes mounted at /api/notifications")
+
 // ✅ NEW: Test routes for debugging
 app.get("/", (req, res) => {
   res.json({
@@ -264,10 +270,26 @@ console.log("✅ Socket.IO chat handlers configured")
 setupRapidFireSocket(io)
 console.log("✅ Socket.IO rapid fire handlers configured")
 
+// 🔔 NOTIFICATIONS: Give helper reference to io + join personal/admin rooms
+setIO(io)
+console.log("✅ Notification helper linked to Socket.IO")
+
 // ✅ Add connection monitoring
 io.on("connection", (socket) => {
   console.log(`🔌 New socket connection: ${socket.id}`)
   console.log(`🔌 Origin: ${socket.handshake.headers.origin}`)
+
+  // 🔔 Notification rooms
+  socket.on("notification:join", (userId) => {
+    if (userId) {
+      socket.join(`user:${userId}`)
+      console.log(`🔔 Notification room joined: user:${userId}`)
+    }
+  })
+  socket.on("notification:join-admin", () => {
+    socket.join("room:admins")
+    console.log("🔔 Admin notification room joined")
+  })
 
   socket.on("disconnect", (reason) => {
     console.log(`🔌 Socket disconnected: ${socket.id}, reason: ${reason}`)
