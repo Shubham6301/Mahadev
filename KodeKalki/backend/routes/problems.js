@@ -4,6 +4,7 @@ import Problem from "../models/Problem.js";
 import User from "../models/User.js";
 import POTDService from "../services/POTDService.js";
 import { authenticateToken, requireAdmin } from "../middleware/auth.js";
+import { notifyBroadcast } from "../utils/notificationHelper.js"; // 🔔
 import {
   makeJudge0Request,
   getApiKeyStats,
@@ -1114,6 +1115,16 @@ router.post("/", authenticateToken, requireAdmin, async (req, res) => {
     await problem.save();
     console.log("✅ Problem created:", problem.title);
     console.log("📚 Reference solutions saved:", problem.referenceSolution?.length || 0);
+
+    // 🔔 Notify all users — new problem added (only if published)
+    if (problem.isPublished) {
+      notifyBroadcast(
+        'problem_added',
+        '📝 New Problem Added',
+        `Check out the new ${problem.difficulty} problem: "${problem.title}"`,
+        `/problems/${problem._id}`
+      ).catch(() => {});
+    }
 
     res.status(201).json(problem);
   } catch (error) {
