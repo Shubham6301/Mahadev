@@ -1,6 +1,7 @@
 import express from 'express';
 import POTDService from '../services/POTDService.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { notify } from '../utils/notificationHelper.js'; // 🔔
 
 const router = express.Router();
 
@@ -39,6 +40,19 @@ router.get('/status', authenticateToken, async (req, res) => {
 router.post('/solve/:problemId', authenticateToken, async (req, res) => {
   try {
     const result = await POTDService.awardPOTDCoins(req.user._id, req.params.problemId);
+
+    // 🔔 Notify user — POTD solved and coins earned
+    if (result.awarded) {
+      notify(
+        req.user._id,
+        'potd_solved',
+        '🏆 POTD Solved!',
+        `You solved today's Problem of the Day and earned ${result.coinsEarned} coins!`,
+        '/problems',
+        { coins: result.coinsEarned, totalCoins: result.totalCoins }
+      ).catch(() => {});
+    }
+
     res.json(result);
   } catch (error) {
     console.error('Error awarding POTD coins:', error);
