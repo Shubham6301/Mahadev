@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import { authenticateToken } from '../middleware/auth.js';
 import passport from 'passport';
+import { notifyAdmin } from '../utils/notificationHelper.js'; // 🔔
 import session from 'express-session';
 import '../services/passport.js';
 
@@ -133,6 +134,14 @@ router.post('/register', async (req, res) => {
     );
 
     console.log('✅ Registration successful for:', user.username);
+    // 🔔 Notify admin — new user registered
+    notifyAdmin(
+      'admin_new_user',
+      '👤 New User Registered',
+      `${user.username} (${user.email}) just created an account.`,
+      '/admin',
+      { userId: user._id }
+    ).catch(() => {}); // fire-and-forget
     return res.status(201).json({
       message: 'User created successfully',
       token,
