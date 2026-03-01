@@ -1,3 +1,4 @@
+import { notify, notifyAdmin, notifyBroadcast, notifyContestParticipants } from "../utils/notificationHelper.js" // 🔔
 import express from "express"
 import Contest from "../models/Contest.js"
 import { authenticateToken, requireAdmin } from "../middleware/auth.js"
@@ -612,6 +613,26 @@ router.post("/:id/register", authenticateToken, async (req, res) => {
     await contest.save()
 
     console.log("🎉 User registered successfully for contest:", contest.name)
+
+    // 🔔 Notify user — registered for contest
+    notify(
+      req.user._id,
+      'contest_status_change',
+      '📋 Contest Registration Confirmed',
+      `You are registered for "${contest.name}". Good luck!`,
+      `/contest/${contest._id}/problems`,
+      { contestId: contest._id }
+    ).catch(() => {});
+
+    // 🔔 Notify admin — new contest registration
+    notifyAdmin(
+      'admin_contest_registration',
+      '📋 New Contest Registration',
+      `${req.user.username} registered for "${contest.name}"`,
+      '/admin',
+      { contestId: contest._id, userId: req.user._id }
+    ).catch(() => {});
+
     res.json({ message: "Successfully registered for contest" })
   } catch (error) {
     console.error("❌ Contest registration error:", error)
@@ -754,6 +775,15 @@ router.post("/", authenticateToken, requireAdmin, async (req, res) => {
     const populatedContest = await Contest.findById(contest._id)
       .populate("createdBy", "username")
       .populate("problems.problem", "title difficulty")
+
+    // 🔔 Notify all users — new contest available
+    notifyBroadcast(
+      'contest_added',
+      '🏆 New Contest Added!',
+      `A new contest "${contest.name}" is now available. Register now!`,
+      `/contest`,
+      { contestId: contest._id }
+    ).catch(() => {});
 
     res.status(201).json(populatedContest)
   } catch (error) {
