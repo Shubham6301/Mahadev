@@ -2,6 +2,7 @@ import express from "express";
 import { authenticateToken as auth } from "../middleware/auth.js";
 import { RedeemItem, RedeemOrder } from "../models/Redeem.js";
 import User from "../models/User.js";
+import { notify, notifyAdmin } from "../utils/notificationHelper.js"; // 🔔 ADD
 
 const router = express.Router();
 
@@ -41,7 +42,8 @@ router.post("/cancel-order", auth, async (req, res) => {
       return res.status(400).json({ error: "Order ID is required" });
     }
 
-    const order = await RedeemOrder.findOne({ _id: orderId, userId });
+    const order = await RedeemOrder.findOne({ _id: orderId, userId })
+      .populate("itemId", "name");
 
     if (!order) {
       return res.status(404).json({ error: "Order not found" });
@@ -58,7 +60,7 @@ router.post("/cancel-order", auth, async (req, res) => {
     order.cancelledBy = "user";
     order.cancelReason = reason || "No reason provided";
     order.cancelledAt = new Date();
-    order.deliveredAt = null; // ensure delivered date is cleared
+    order.deliveredAt = null;
 
     await order.save();
 
@@ -66,6 +68,27 @@ router.post("/cancel-order", auth, async (req, res) => {
     const user = await User.findById(userId);
     user.coins = (user.coins || 0) + order.totalCost;
     await user.save();
+
+    const itemName = order.itemId?.name || "your item";
+
+    // 🔔 Notify user — cancelled by themselves + coins refunded
+    await notify(
+      userId,
+      'order_update',
+      '❌ Order Cancelled',
+      `Your order for "${itemName}" has been cancelled. ${order.totalCost} coins refunded to your account.`,
+      '/redeem',
+      { orderId: order._id, status: 'cancelled', refundedCoins: order.totalCost }
+    );
+
+    // 🔔 Notify admin — user cancelled an order
+    await notifyAdmin(
+      'admin_order_status_change',
+      '❌ Order Cancelled by User',
+      `${user.username} cancelled order for "${itemName}". Reason: ${order.cancelReason}`,
+      '/admin',
+      { orderId: order._id, userId, reason: order.cancelReason }
+    );
 
     res.json({
       message: "Order cancelled successfully",
@@ -159,6 +182,25 @@ router.post("/order", auth, async (req, res) => {
     // Populate the order with item details for response
     await order.populate("itemId", "name description imageUrl");
 
+    // 🔔 Notify user — order placed successfully
+    await notify(
+      userId,
+      'order_update',
+      '🛒 Order Placed!',
+      `Your order for "${item.name}" (${quantity}x) has been placed for ${totalCost} coins. We'll process it soon!`,
+      '/redeem',
+      { orderId: order._id, status: 'pending', totalCost }
+    );
+
+    // 🔔 Notify admin — new order received
+    await notifyAdmin(
+      'admin_new_order',
+      '🛒 New Order Received',
+      `${user.username} ordered "${item.name}" (${quantity}x) — ${totalCost} coins`,
+      '/admin',
+      { orderId: order._id, userId, itemId, quantity, totalCost }
+    );
+
     res.status(201).json({
       message: "Order placed successfully",
       order,
@@ -210,7 +252,6 @@ router.get("/orders/:orderId", auth, async (req, res) => {
 // Admin: Add new redeem item
 router.post("/admin/items", auth, async (req, res) => {
   try {
-    // Check if user is admin
     const user = await User.findById(req.user.id);
     if (user.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
@@ -251,7 +292,6 @@ router.post("/admin/items", auth, async (req, res) => {
 // Admin: Update redeem item
 router.put("/admin/items/:itemId", auth, async (req, res) => {
   try {
-    // Check if user is admin
     const user = await User.findById(req.user.id);
     if (user.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
@@ -279,7 +319,6 @@ router.put("/admin/items/:itemId", auth, async (req, res) => {
 // Admin: Get all orders
 router.get("/admin/orders", auth, async (req, res) => {
   try {
-    // Check if user is admin
     const user = await User.findById(req.user.id);
     if (user.role !== "admin") {
       return res.status(403).json({ error: "Admin access required" });
@@ -308,7 +347,10 @@ router.put("/admin/orders/:orderId", auth, async (req, res) => {
     const { orderId } = req.params;
     const { status, trackingNumber, reason, deliveredAt, predictedDeliveryDate } = req.body;
 
-    const order = await RedeemOrder.findById(orderId);
+    const order = await RedeemOrder.findById(orderId)
+      .populate("userId", "username _id")
+      .populate("itemId", "name");
+
     if (!order) {
       return res.status(404).json({ error: "Order not found" });
     }
@@ -325,12 +367,14 @@ router.put("/admin/orders/:orderId", auth, async (req, res) => {
       });
     }
 
+    const itemName  = order.itemId?.name     || "your item";
+    const orderUserId   = order.userId?._id;
+    const orderUsername = order.userId?.username || "User";
+
     // --- Admin cancelling ---
     if (status === "cancelled") {
       if (!reason || reason.trim() === "") {
-        return res.status(400).json({
-          error: "Cancellation reason is required",
-        });
+        return res.status(400).json({ error: "Cancellation reason is required" });
       }
 
       order.status = "cancelled";
@@ -338,43 +382,84 @@ router.put("/admin/orders/:orderId", auth, async (req, res) => {
       order.cancelReason = reason.trim();
       order.cancelledAt = new Date();
       order.deliveredAt = null;
-      order.predictedDeliveryDate = null; // Clear prediction
+      order.predictedDeliveryDate = null;
 
+      // Refund coins to user
       const user = await User.findById(order.userId);
       if (user) {
         user.coins = (user.coins || 0) + order.totalCost;
         await user.save();
       }
+
+      // 🔔 Notify user — admin cancelled + coins refunded
+      if (orderUserId) {
+        await notify(
+          orderUserId,
+          'order_update',
+          '❌ Order Cancelled by Admin',
+          `Your order for "${itemName}" was cancelled by admin. Reason: ${reason.trim()}. ${order.totalCost} coins have been refunded.`,
+          '/redeem',
+          { orderId: order._id, status: 'cancelled', refundedCoins: order.totalCost }
+        );
+      }
+
     } else {
-      // Non‑cancellation update
+      // Non-cancellation status updates
       order.status = status;
 
-      // Handle deliveredAt
       if (status === "delivered") {
-        if (deliveredAt) {
-          order.deliveredAt = new Date(deliveredAt);
-        } else {
-          order.deliveredAt = new Date();
-        }
-        // Clear prediction once delivered
+        order.deliveredAt = deliveredAt ? new Date(deliveredAt) : new Date();
         order.predictedDeliveryDate = null;
       } else if (status === "shipped") {
-        // Auto-calculate predicted delivery (7 days from now if not provided)
         if (predictedDeliveryDate) {
           order.predictedDeliveryDate = new Date(predictedDeliveryDate);
         } else if (!order.predictedDeliveryDate) {
           const predicted = new Date();
-          predicted.setDate(predicted.getDate() + 7); // 7 days delivery estimate
+          predicted.setDate(predicted.getDate() + 7); // 7 days estimate
           order.predictedDeliveryDate = predicted;
         }
         order.deliveredAt = null;
       } else {
-        // Status changed away from delivered/shipped
         order.deliveredAt = null;
-        // Keep prediction for processing status
         if (status === "processing" && predictedDeliveryDate) {
           order.predictedDeliveryDate = new Date(predictedDeliveryDate);
         }
+      }
+
+      // 🔔 Notify user per status
+      const statusMessages = {
+        pending: {
+          title: '🕐 Order Pending',
+          msg: `Your order for "${itemName}" is pending.`,
+        },
+        processing: {
+          title: '⚙️ Order Processing',
+          msg: `Your order for "${itemName}" is being processed!`,
+        },
+        confirmed: {
+          title: '✅ Order Confirmed',
+          msg: `Your order for "${itemName}" has been confirmed!`,
+        },
+        shipped: {
+          title: '🚚 Order Shipped!',
+          msg: `Your order for "${itemName}" is on the way${trackingNumber ? ` — Tracking: ${trackingNumber}` : ''}!`,
+        },
+        delivered: {
+          title: '🎉 Order Delivered!',
+          msg: `Your order for "${itemName}" has been delivered. Enjoy!`,
+        },
+      };
+
+      const notifData = statusMessages[status];
+      if (notifData && orderUserId) {
+        await notify(
+          orderUserId,
+          'order_update',
+          notifData.title,
+          notifData.msg,
+          '/redeem',
+          { orderId: order._id, status, trackingNumber }
+        );
       }
     }
 
@@ -384,10 +469,16 @@ router.put("/admin/orders/:orderId", auth, async (req, res) => {
 
     await order.save();
 
-    res.json({
-      message: "Order updated successfully",
-      order,
-    });
+    // 🔔 Notify admin panel log — status changed
+    await notifyAdmin(
+      'admin_order_status_change',
+      `📦 Order → ${status.toUpperCase()}`,
+      `${orderUsername}'s order for "${itemName}" marked as ${status}`,
+      '/admin',
+      { orderId: order._id, status, trackingNumber }
+    );
+
+    res.json({ message: "Order updated successfully", order });
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: "Server error" });
