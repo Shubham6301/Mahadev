@@ -1,6 +1,7 @@
 import express from 'express';
 import Help from '../models/Help.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { notifyBroadcast } from '../utils/notificationHelper.js'; // 🔔
 
 const router = express.Router();
 
@@ -224,6 +225,18 @@ router.post('/admin/create', authenticateToken, async (req, res) => {
     await article.save();
     
     console.log('✅ Article created:', article.title, '| Slug:', article.slug);
+
+    // 🔔 Notify all users — new help article (only if published)
+    if (article.isPublished) {
+      notifyBroadcast(
+        'help_article_added',
+        '📖 New Help Article',
+        `"${article.title}" is now available in Help Center`,
+        `/help/${article.slug}`,
+        { articleId: article._id, slug: article.slug }
+      ).catch(() => {});
+    }
+
     res.status(201).json(article);
   } catch (error) {
     console.error('❌ Error creating article:', error);
