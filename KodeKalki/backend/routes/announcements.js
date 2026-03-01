@@ -1,6 +1,7 @@
 import express from "express"
 import Announcement from "../models/Announcement.js"
 import { authenticateToken, requireAdmin } from "../middleware/auth.js"
+import { notifyBroadcast } from "../utils/notificationHelper.js" // 🔔
 
 const router = express.Router()
 
@@ -56,6 +57,15 @@ router.post("/", authenticateToken, requireAdmin, async (req, res) => {
 
     await announcement.populate("createdBy", "username")
     console.log("✅ Announcement populated with creator info")
+
+    // 🔔 Notify all users — new announcement
+    notifyBroadcast(
+      'announcement',
+      '📢 New Announcement',
+      announcement.title,
+      '/announcements',
+      { announcementId: announcement._id }
+    ).catch(() => {});
 
     res.status(201).json(announcement)
   } catch (error) {
