@@ -1,6 +1,7 @@
 import express from 'express';
 import User from '../models/User.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { notify, notifyAdmin } from '../utils/notificationHelper.js'; // 🔔
 
 const router = express.Router();
 
@@ -344,6 +345,26 @@ router.put('/:id', authenticateToken, async (req, res) => {
     Object.keys(update).forEach(key => update[key] === undefined && delete update[key]);
     const user = await User.findByIdAndUpdate(req.params.id, update, { new: true }).select('-password');
     if (!user) return res.status(404).json({ message: 'User not found' });
+
+    // 🔔 If user was banned/blocked, notify admin log + notify user
+    if (isBanned === true) {
+      notifyAdmin(
+        'admin_user_blocked',
+        '🔒 User Banned',
+        `${user.username} (${user.email}) has been banned`,
+        '/admin',
+        { userId: user._id }
+      ).catch(() => {});
+      notify(
+        user._id,
+        'announcement',
+        '🔒 Account Suspended',
+        'Your account has been suspended. Contact support for more info.',
+        null,
+        {}
+      ).catch(() => {});
+    }
+
     res.json(user);
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -365,4 +386,3 @@ router.delete('/:id', authenticateToken, async (req, res) => {
 });
 
 export default router;
-
