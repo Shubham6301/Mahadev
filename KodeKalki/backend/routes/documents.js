@@ -4,6 +4,7 @@ import { v2 as cloudinary } from 'cloudinary';
 import { authenticateToken as auth } from '../middleware/auth.js';
 import Document from '../models/Document.js';
 import Subject from '../models/Subject.js';
+import { notifyAdmin } from '../utils/notificationHelper.js'; // 🔔
 
 const router = express.Router();
 
@@ -431,6 +432,15 @@ router.post('/', auth, async (req, res) => {
     const populatedDocument = await Document.findById(document._id)
       .populate('subject', 'name icon color')
       .populate('createdBy', 'username profile.avatar');
+
+    // 🔔 Notify admin — new document added
+    notifyAdmin(
+      'admin_document_added',
+      '📄 New Document Added',
+      `"${document.title}" was uploaded${document.isPublished ? ' and published' : ' (draft)'}`,
+      '/admin',
+      { documentId: document._id, isPublished: document.isPublished }
+    ).catch(() => {});
 
     res.status(201).json({
       success: true,
